@@ -1,0 +1,31 @@
+the small model learns one byte at a time.
+the model reads a context and predicts the next byte.
+attention lets each position look at earlier positions.
+the causal mask prevents a position from seeing the future.
+an embedding turns a byte into a vector of numbers.
+a position embedding tells the model where the byte appears.
+rms normalization keeps vector scales under control.
+the feed forward network transforms every position independently.
+residual connections carry old information around each transformation.
+softmax turns logits into a probability distribution.
+cross entropy measures how surprised the model was by the correct byte.
+backpropagation sends the error through every operation in reverse order.
+adam uses moving averages to update every learned parameter.
+training repeats prediction, loss, backward, and update.
+inference repeats prediction and sampling to create new text.
+
+the small model learns one byte at a time.
+the model reads a context and predicts the next byte.
+attention lets each position look at earlier positions.
+the causal mask prevents a position from seeing the future.
+an embedding turns a byte into a vector of numbers.
+a position embedding tells the model where the byte appears.
+rms normalization keeps vector scales under control.
+the feed forward network transforms every position independently.
+residual connections carry old information around each transformation.
+softmax turns logits into a probability distribution.
+cross entropy measures how surprised the model was by the correct byte.
+backpropagation sends the error through every operation in reverse order.
+adam uses moving averages to update every learned parameter.
+training repeats prediction, loss, backward, and update.
+inference repeats prediction and sampling to create new text.

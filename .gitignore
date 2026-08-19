@@ -1,0 +1,16 @@
+# CMake / CLion generated files
+/build/
+/build-*/
+/cmake-build-*/
+/.idea/
+
+# Compiler output and model checkpoints
+*.o
+*.obj
+*.a
+*.lib
+*.exe
+*.bin
+
+# Test leftovers
+minillm_test_checkpoint.bin
