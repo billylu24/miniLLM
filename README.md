@@ -1,17 +1,36 @@
-# miniLLM：只用 C11 从零训练一个小型 Transformer
+# miniLLM: Train a Small Transformer from Scratch in C11
 
-这是一个面向学习的、完整可运行的 decoder-only Transformer。它不依赖
-PyTorch、BLAS、tokenizer 库或任何第三方代码，只使用 C11 标准库和
-`<math.h>`。项目包含训练、推理、手写反向传播、AdamW、checkpoint、CLI、
-数值梯度检查和端到端测试。
+miniLLM is a complete, runnable decoder-only Transformer built for learning. It
+does not depend on PyTorch, BLAS, tokenizer libraries, or other third-party
+code. The implementation uses only the C11 standard library and `<math.h>`, and
+includes training, inference, explicit backpropagation, AdamW, checkpoints, a
+CLI, numerical gradient checks, and end-to-end tests.
 
-这里的“mini”很重要：默认模型只有 34,400 个参数，目标是让一个人能够从头
-读完，而不是追求现代大模型的速度和能力。现代 LLM 只是把相同的核心结构做得
-更宽、更深，并配合高度优化的矩阵库、并行硬件和海量数据。
+The "mini" part matters: the default model has only 34,400 parameters. The goal
+is to make the entire implementation understandable from beginning to end, not
+to compete with modern language models in speed or capability. Large language
+models use the same core ideas at a much greater width and depth, together with
+highly optimized matrix libraries, parallel hardware, and enormous datasets.
 
-## 1. 最快上手
+## Personal Learning Notes and Reflections
 
-在 Linux/macOS 或已经把 CMake 放入 `PATH` 的 Windows 终端中：
+These two files capture my understanding of the model, its tensor shapes, and
+the complete data flow. The SVG is the primary and most detailed resource; the
+DOCX is a formatted companion document.
+
+[![miniLLM learning map preview](docs/miniLLM-preview.png)](docs/miniLLM.svg?raw=1)
+
+- **Primary:** Click the preview to open the full miniLLM learning map (SVG,
+  about 3.9 MiB).
+- **Companion:** [Download the formatted learning notes (DOCX)](docs/miniLLM_learn_formatted.docx).
+
+The SVG is linked instead of embedded because its large canvas and file size
+make inline rendering in a README unreliable. Open the link directly, or
+download the file and view it in a browser or vector graphics viewer.
+
+## 1. Quick Start
+
+On Linux/macOS, or in a Windows terminal where CMake is available in `PATH`:
 
 ```console
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
@@ -19,170 +38,193 @@ cmake --build build
 ctest --test-dir build --output-on-failure
 ```
 
-训练示例语料并保存模型：
+Train on the sample corpus and save a checkpoint:
 
 ```console
 ./build/minillm train data/tiny.txt tiny.bin 1000 0.003
 ```
 
-Windows 下可执行文件通常是 `build\minillm.exe`：
+On Windows, the executable is usually `build\minillm.exe`:
 
 ```console
 build\minillm.exe train data\tiny.txt tiny.bin 1000 0.003
 build\minillm.exe generate tiny.bin "the " 300 0.8 32
 ```
 
-继续训练与查看 checkpoint：
+Resume training or inspect a checkpoint:
 
 ```console
 build\minillm.exe resume tiny.bin data\tiny.txt 500 0.001
 build\minillm.exe info tiny.bin
 ```
 
-CLion 用户可以直接打开根目录的 `CMakeLists.txt`，选择 `minillm_cli` 或
-`minillm_tests` target 运行。本项目要求严格 C11，CMake 已关闭 GNU 扩展。
+CLion users can open the root `CMakeLists.txt` directly and run either the
+`minillm_cli` or `minillm_tests` target. The project requires strict C11, and
+CMake disables GNU extensions.
 
-## 2. 一次训练到底发生了什么
+## 2. What Happens During Training?
 
-假设语料中有如下 byte：
+Suppose the corpus contains these bytes:
 
 ```text
 h e l l o
 ```
 
-输入是 `h e l l`，监督答案是向右错一位的 `e l l o`。模型在每个位置预测
-下一个 byte，并对所有位置的交叉熵取平均。
+The input is `h e l l`, while the target is the same sequence shifted one
+position to the right: `e l l o`. At every position, the model predicts the
+next byte, and the loss is the mean cross-entropy across all positions.
 
 ```text
 byte id
-   │
-   ├── token embedding ──┐
-   └── position embedding┴─> x
-                              │
-                  ┌───────────▼────────────┐
-                  │ RMSNorm                │
-                  │ causal multi-head      │
-                  │ self-attention         │
-                  │ + residual             │
-                  │ RMSNorm → MLP → +resid │ × n_layers
-                  └───────────┬────────────┘
-                              │
-                         final RMSNorm
-                              │
-                       linear → 256 logits
-                              │
-                     softmax + cross entropy
+   |
+   |-- token embedding ----+
+   `-- position embedding -+-> x
+                               |
+                   +-----------v------------+
+                   | RMSNorm                 |
+                   | causal multi-head       |
+                   | self-attention          |
+                   | + residual              |
+                   | RMSNorm -> MLP -> +resid| x n_layers
+                   +-----------+------------+
+                               |
+                          final RMSNorm
+                               |
+                        linear -> 256 logits
+                               |
+                      softmax + cross-entropy
 ```
 
-一次 `minillm_train_step()` 执行四件事：
+One call to `minillm_train_step()` performs four operations:
 
-1. 从语料随机截取 `context_length + 1` 个 byte。
-2. `forward()` 计算 logits 和平均交叉熵。
-3. `backward()` 按相反顺序计算每个参数的梯度。
-4. `minillm_apply_gradients()` 用 AdamW 更新参数。
+1. Randomly select `context_length + 1` bytes from the corpus.
+2. Run `forward()` to compute logits and mean cross-entropy.
+3. Run `backward()` in reverse order to compute every parameter gradient.
+4. Run `minillm_apply_gradients()` to update the parameters with AdamW.
 
-推理没有第 2 步的正确答案，也不执行反向传播。它拿最后一个位置的 logits，
-经过 temperature 和 top-k 采样得到新 byte，把新 byte 接回上下文，然后重复。
+Inference has no target sequence and does not run backpropagation. It samples a
+new byte from the final-position logits using temperature and top-k sampling,
+appends that byte to the context, and repeats.
 
-## 3. 模块地图与源码阅读顺序
+## 3. Project Map and Suggested Reading Order
 
-实现不再集中在一个千行文件中，而是按学习主题组织：
+The implementation is organized by learning topic instead of being placed in a
+single thousand-line source file:
 
 ```text
 src/
-├── core/       参数、模型生命周期、随机数、前向缓存
-├── layers/     线性层、RMSNorm、因果多头注意力
-├── model/      把所有层串起来的 forward 与 backward
-├── training/   梯度裁剪、AdamW、一次训练步骤
-├── inference/  temperature、top-k、自回归生成
-├── io/         checkpoint 保存与加载
-└── internal/   各模块共享的数据结构与内部函数声明
+|-- core/       parameters, model lifecycle, random numbers, forward cache
+|-- layers/     linear layers, RMSNorm, causal multi-head attention
+|-- model/      complete forward and backward passes
+|-- training/   gradient clipping, AdamW, one training step
+|-- inference/  temperature, top-k, autoregressive generation
+|-- io/         checkpoint save and load
+`-- internal/   shared data structures and internal declarations
 ```
 
-先读 [`docs/00-LEARNING-PATH.md`](docs/00-LEARNING-PATH.md)，它把学习过程拆成
-九个小阶段。第一次不需要理解反向传播。
+Start with [`docs/00-LEARNING-PATH.md`](docs/00-LEARNING-PATH.md), which divides
+the project into nine small learning stages. You do not need to understand
+backpropagation on the first pass.
 
-| 顺序 | 文件或函数 | 重点 |
+| Order | File or function | Focus |
 |---:|---|---|
-| 1 | `include/minillm.h` | 从公开 API 建立整体认识 |
-| 2 | `src/main.c` | 看训练、保存、生成如何串起来 |
-| 3 | `src/core/model.c` | 参数有哪些、形状多大、如何初始化 |
-| 4 | `src/layers/` | 一次只理解线性层、RMSNorm 或注意力 |
-| 5 | `src/model/forward.c` | embedding、注意力、MLP、loss 如何串联 |
-| 6 | `src/model/backward.c` | 沿计算图反向应用链式法则 |
-| 7 | `src/training/optimizer.c` | 梯度裁剪与 AdamW |
-| 8 | `src/inference/generate.c` | 滑动上下文和自回归采样 |
-| 9 | `tests/test_minillm.c` | 如何证明梯度、训练和存盘是对的 |
+| 1 | `include/minillm.h` | Build a high-level view from the public API |
+| 2 | `src/main.c` | See how training, saving, and generation connect |
+| 3 | `src/core/model.c` | Learn the parameter set, shapes, and initialization |
+| 4 | `src/layers/` | Study linear, RMSNorm, and attention one at a time |
+| 5 | `src/model/forward.c` | Follow embeddings, attention, MLP, and loss |
+| 6 | `src/model/backward.c` | Apply the chain rule in reverse graph order |
+| 7 | `src/training/optimizer.c` | Understand gradient clipping and AdamW |
+| 8 | `src/inference/generate.c` | Follow sliding context and autoregressive sampling |
+| 9 | `tests/test_minillm.c` | See how gradients, training, and checkpoints are verified |
 
-建议边读边在纸上记录数组形状。最常用的符号是：
+Track array shapes while reading. The most common symbols are:
 
-- `T`：当前 token 数量；
-- `D`：`d_model`；
-- `H`：注意力头数；
-- `Dh = D/H`：每个头的宽度；
-- `F`：MLP 隐藏宽度；
-- `V = 256`：byte 词表大小。
+- `T`: current token count;
+- `D`: `d_model`;
+- `H`: number of attention heads;
+- `Dh = D/H`: width of each attention head;
+- `F`: MLP hidden width;
+- `V = 256`: byte vocabulary size.
 
-先看图解版 [`docs/01-ARCHITECTURE.md`](docs/01-ARCHITECTURE.md)，再看公式版
-[`docs/DERIVATION.md`](docs/DERIVATION.md)。每个 `src` 子目录也有一份 README，
-只解释该模块，避免一次接触整个项目。
+Read the visual overview in
+[`docs/01-ARCHITECTURE.md`](docs/01-ARCHITECTURE.md), followed by the formulas in
+[`docs/DERIVATION.md`](docs/DERIVATION.md). Each `src` subdirectory also has a
+focused README that explains only that module.
 
-## 4. 为什么使用 byte tokenizer
+## 4. Why Use a Byte Tokenizer?
 
-词表恰好是 `[0, 255]`，文件中的每个 byte 直接就是 token id。优点是零依赖、
-不会出现 unknown token，而且任何文件都能输入。缺点是 UTF-8 中文字符通常占
-3 个 byte，序列会比 BPE tokenizer 更长。这个取舍非常适合教学：先理解模型，
-以后再单独实现 BPE。
+The vocabulary is exactly `[0, 255]`, so every byte in a file is already a
+token ID. This approach has no tokenizer dependency, never produces an unknown
+token, and accepts any file as input. The tradeoff is sequence length: for
+example, a Chinese UTF-8 character commonly occupies three bytes. This is a
+useful educational tradeoff because it keeps tokenization transparent; a BPE
+tokenizer can be implemented later as a separate extension.
 
-## 5. 默认模型
+## 5. Default Model
 
-| 配置 | 默认值 |
+| Setting | Default value |
 |---|---:|
-| vocabulary | 256 bytes |
-| context length | 32 |
-| model width | 32 |
-| attention heads | 4 |
+| Vocabulary | 256 bytes |
+| Context length | 32 |
+| Model width | 32 |
+| Attention heads | 4 |
 | Transformer blocks | 2 |
 | MLP width | 64 |
-| parameters | 34,400 |
+| Parameters | 34,400 |
 
-所有矩阵都是行优先的一维 `float` 数组，矩阵乘法是普通的三重循环。这比优化库
-慢很多，但你可以逐行跟踪每个乘加。默认模型适合短语料和概念验证，不会生成
-接近商业大模型质量的文本。
+All matrices are row-major, one-dimensional `float` arrays. Matrix
+multiplication uses ordinary triple loops. This is far slower than an optimized
+library, but every multiply-add can be traced directly. The default model is
+suited to small corpora and proof-of-concept experiments; it is not expected to
+produce text comparable to commercial language models.
 
-## 6. 测试为什么可信
+## 6. Why the Tests Are Meaningful
 
-测试不只检查“程序没有崩溃”：
+The tests verify more than whether the program avoids crashing:
 
-- **有限差分梯度检查**：用 loss 的定义近似某个参数的导数，与手写 backward
-  比较；这能发现链式法则、缩放和下标错误。
-- **微型过拟合**：模型必须把重复的 `abc` 语料 loss 从随机水平显著降下来。
-- **checkpoint round-trip**：保存后加载的每个参数必须 bit-identical。
-- **确定性生成**：保存随机数状态后，原模型与加载模型应生成相同 byte。
-- **非法配置**：`d_model` 不能被头数整除时必须拒绝创建模型。
+- **Finite-difference gradient checks:** approximate a parameter derivative
+  directly from the loss definition and compare it with `backward()`. This
+  catches chain-rule, scaling, and indexing errors.
+- **Tiny overfit test:** require the model to reduce loss substantially on a
+  repeating `abc` corpus.
+- **Checkpoint round trip:** require every parameter to remain bit-identical
+  after saving and loading.
+- **Deterministic generation:** after saving random-number state, require the
+  original and restored models to generate the same bytes.
+- **Invalid configuration checks:** reject configurations where `d_model` is
+  not divisible by the number of heads.
 
-随机初始化时，256 类均匀预测的理论交叉熵约为 `ln(256) = 5.545`。如果初始
-loss 离这个数很远，通常说明 softmax、交叉熵或初始化存在问题。
+For random initialization, the theoretical cross-entropy of a uniform
+prediction over 256 classes is approximately `ln(256) = 5.545`. An initial loss
+far from that value usually indicates a problem in softmax, cross-entropy, or
+initialization.
 
-## 7. 可以亲手完成的扩展
+## 7. Suggested Extensions
 
-建议一次只改一件事，并保持梯度检查和过拟合测试通过：
+Change one thing at a time and keep the gradient and overfit tests passing:
 
-1. 把 ReLU 换成 GELU，并推导它的导数。
-2. 实现学习率 warmup 与 cosine decay。
-3. 让输出权重与 token embedding 权重共享。
-4. 增加 validation split，分别报告训练和验证 loss。
-5. 实现 batch size，而不是每步只训练一个序列。
-6. 写一个最小 BPE tokenizer。
-7. 保存为明确规定字节序的跨平台 checkpoint。
-8. 最后再做 SIMD、线程或 BLAS 优化，并与这个朴素版本逐项对照。
+1. Replace ReLU with GELU and derive its gradient.
+2. Add learning-rate warmup and cosine decay.
+3. Tie the output weights to the token embedding weights.
+4. Add a validation split and report training and validation loss separately.
+5. Implement batch training instead of one sequence per step.
+6. Build a minimal BPE tokenizer.
+7. Define an explicit byte order for portable checkpoints.
+8. Add SIMD, threading, or BLAS last, comparing each optimization with this
+   transparent baseline.
 
-## 8. 项目边界
+## 8. Project Scope
 
-“只用标准库”在这里表示源码只包含 ISO C 标准头文件。`<math.h>` 属于 C 标准
-库；部分 Unix 工具链要求链接其独立的系统数学库 `libm`，CMake 会自动处理。
-构建系统和编译器本身当然不是运行时依赖。
+"Standard library only" means that the source includes only ISO C standard
+headers. `<math.h>` is part of the C standard library, although some Unix
+toolchains expose the system math library as a separate `libm` link target;
+CMake handles that automatically. The build system and compiler are not runtime
+dependencies.
 
-checkpoint 直接写入本机的整数和 `float` 表示，适合同一架构上的学习实验；它
-不是面向生产环境的长期文件格式。训练也没有 GPU、batch、混合精度或并行化。
-这些限制都是有意的：先得到一个透明、正确、可测试的基线。
+Checkpoints store native integer and `float` representations. They are suitable
+for learning experiments on the same architecture, but they are not a
+long-term, production-grade interchange format. Training also omits GPU
+acceleration, batching, mixed precision, and parallelism. These constraints are
+intentional: the project provides a transparent, correct, and testable
+baseline first.
