@@ -14,15 +14,17 @@ highly optimized matrix libraries, parallel hardware, and enormous datasets.
 
 ## Personal Learning Notes and Reflections
 
-These two files capture my understanding of the model, its tensor shapes, and
+These resources capture my understanding of the model, its tensor shapes, and
 the complete data flow. The SVG is the primary and most detailed resource; the
-DOCX is a formatted companion document.
+formatted companion notes are available as a previewable PDF and an editable
+DOCX.
 
 [![miniLLM learning map preview](docs/miniLLM-preview.png)](docs/miniLLM.svg?raw=1)
 
 - **Primary:** Click the preview to open the full miniLLM learning map (SVG,
   about 3.9 MiB).
-- **Companion:** [Download the formatted learning notes (DOCX)](docs/miniLLM_learn_formatted.docx).
+- **Companion:** [Preview the formatted learning notes (PDF)](docs/miniLLM_learn_formatted.pdf)
+  or [download the editable source (DOCX)](docs/miniLLM_learn_formatted.docx).
 
 The SVG is linked instead of embedded because its large canvas and file size
 make inline rendering in a README unreliable. Open the link directly, or
